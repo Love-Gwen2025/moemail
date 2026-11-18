@@ -15,12 +15,19 @@ jobs:
           set -euo pipefail
           API="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID"
 
-          echo "== account =="
-          echo "$CLOUDFLARE_ACCOUNT_ID"
-
           echo "== projects =="
-          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "$API/pages/projects?per_page=50" -o /tmp/projects.json
+          for qs in "page=1&per_page=10" ""; do
+            curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "$API/pages/projects?$qs" -o /tmp/projects.json
+            if jq -e '.success == true' /tmp/projects.json >/dev/null 2>&1; then
+              echo "query: $qs"
+              break
+            fi
+            echo "query '$qs' failed:"
+            cat /tmp/projects.json
+            echo
+          done
+
           jq '{success, errors, projects: [.result[]? | {name, subdomain, domains, source, created_on, latest_deployment_id: .latest_deployment.id, env_var_keys: (.deployment_configs // {} | with_entries(.value = ((.value.env_vars // {}) | keys)))}]}' /tmp/projects.json
 
           NAME=$(jq -r '.result[]? | select((.domains // []) | index("gwenworks.com")) | .name' /tmp/projects.json | head -1)
