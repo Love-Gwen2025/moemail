@@ -236,6 +236,14 @@ export const {
   },
 }))
 
+export function isGithubOAuthConfigured() {
+  return Boolean(process.env.AUTH_GITHUB_ID && process.env.AUTH_GITHUB_SECRET)
+}
+
+export function isGoogleOAuthConfigured() {
+  return Boolean(process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET)
+}
+
 export async function register(username: string, password: string) {
   const db = createDb()
 
