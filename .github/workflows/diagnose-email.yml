@@ -7,7 +7,7 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect aggregate mail and auth stats
+      - name: Inspect aggregate mail stats
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -24,14 +24,14 @@ jobs:
               -d "$(jq -n --arg sql "$sql" '{sql:$sql}')" | jq -c '{success, errors, rows: [.result[0].results[]?]}'
           }
 
-          echo "== mailboxes =="
-          query "SELECT COUNT(*) AS total, SUM(CASE WHEN expires_at > (strftime('%s','now') * 1000) THEN 1 ELSE 0 END) AS active FROM email;"
-          query "SELECT MIN(created_at) AS oldest, MAX(created_at) AS newest FROM email;"
+          echo "== mailbox domains =="
+          query "SELECT substr(address, instr(address, '@') + 1) AS domain, COUNT(*) AS n FROM email GROUP BY domain ORDER BY n DESC;"
 
-          echo "== messages =="
-          query "SELECT COUNT(*) AS total, MAX(received_at) AS last_received FROM message;"
-          query "SELECT date(received_at/1000, 'unixepoch') AS day, COUNT(*) AS n FROM message GROUP BY day ORDER BY day DESC LIMIT 14;"
+          echo "== expiry range =="
+          query "SELECT MIN(expires_at) AS min_exp, MAX(expires_at) AS max_exp FROM email;"
 
-          echo "== auth =="
-          query "SELECT COUNT(*) AS n FROM user;"
-          query "SELECT COUNT(*) AS n FROM account WHERE provider = 'github';"
+          echo "== ownership =="
+          query "SELECT SUM(CASE WHEN userId IS NULL THEN 1 ELSE 0 END) AS anonymous, SUM(CASE WHEN userId IS NOT NULL THEN 1 ELSE 0 END) AS owned FROM email;"
+
+          echo "== message domains =="
+          query "SELECT substr(to_address, instr(to_address, '@') + 1) AS domain, COUNT(*) AS n FROM message GROUP BY domain ORDER BY n DESC LIMIT 10;"
