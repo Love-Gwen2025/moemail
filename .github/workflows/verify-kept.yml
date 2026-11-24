@@ -1,0 +1,38 @@
+name: Verify Kept Mailbox
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify kept mailbox integrity
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DB_ID: ${{ secrets.DATABASE_ID }}
+        run: |
+          set -euo pipefail
+          API="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT"
+          H="Authorization: Bearer $CF_TOKEN"
+
+          q() {
+            curl -sS -H "$H" -H "Content-Type: application/json" -X POST "$API/d1/database/$DB_ID/query" \
+              -d "$(jq -n --arg sql "$1" '{sql:$sql}')" | jq -c '{success, errors, rows: [.result[0].results[]?]}'
+          }
+
+          echo "== totals =="
+          q "SELECT (SELECT COUNT(*) FROM email) AS emails, (SELECT COUNT(*) FROM message) AS messages;"
+
+          echo "== kept email row =="
+          q "SELECT id, address, userId, created_at, expires_at FROM email WHERE LOWER(address) = LOWER('Qyef40dN@gwenworks.com');"
+
+          echo "== kept messages (id, received_at, type) =="
+          q "SELECT id, received_at, type FROM message WHERE emailId IN (SELECT id FROM email WHERE LOWER(address) = LOWER('Qyef40dN@gwenworks.com')) ORDER BY received_at;"
+
+          echo "== original three messages still present =="
+          q "SELECT COUNT(*) AS present FROM message WHERE id IN ('5ce822aa-1009-400b-8fcf-148339f8832e','a786e0a8-1359-4c59-b0cc-1b369adf36af','9aa5ea62-244c-47b5-b228-46ca2cbf9b16');"
+
+          echo "== db size =="
+          curl -sS -H "$H" "$API/d1/database/$DB_ID" | jq -c '{success, errors, result: (.result | {name, file_size})}'
