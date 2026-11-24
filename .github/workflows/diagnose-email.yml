@@ -7,50 +7,31 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect Workers, D1, Pages and Email Routing
+      - name: Inspect aggregate mail and auth stats
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DB_ID: ${{ secrets.DATABASE_ID }}
-          DB_NAME: ${{ secrets.DATABASE_NAME }}
         run: |
           set -euo pipefail
           API="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT"
           H="Authorization: Bearer $CF_TOKEN"
 
-          echo "== d1 databases =="
-          curl -sS -H "$H" "$API/d1/database?per_page=50" | jq '{success, errors, dbs: [.result[]? | {name, uuid}]}'
-
-          echo "== workers scripts =="
-          curl -sS -H "$H" "$API/workers/scripts" | jq '{success, errors, scripts: [.result[]? | {id, created_on, modified_on}]}'
-
-          echo "== worker bindings =="
-          for w in $(curl -sS -H "$H" "$API/workers/scripts" | jq -r '.result[]?.id' | grep -Ei 'email|mail|cleanup' || true); do
-            echo "-- $w --"
-            curl -sS -H "$H" "$API/workers/scripts/$w/settings" | jq '{success, errors, bindings: [.result.bindings[]? | {name, type, database_id: (.database_id // null), id: (.id // null), namespace_id: (.namespace_id // null)}]}'
-          done
-
-          echo "== d1 queries on $DB_NAME / $DB_ID =="
           query() {
             local sql="$1"
             echo "-- $sql"
             curl -sS -H "$H" -H "Content-Type: application/json" -X POST "$API/d1/database/$DB_ID/query" \
-              -d "$(jq -n --arg sql "$sql" '{sql:$sql}')" | jq -c '{success, errors, result: .result}'
+              -d "$(jq -n --arg sql "$sql" '{sql:$sql}')" | jq -c '{success, errors, rows: [.result[0].results[]?]}'
           }
-          query "SELECT COUNT(*) AS n, MAX(received_at) AS last_received FROM message;"
-          query "SELECT COUNT(*) AS n FROM email;"
-          query "SELECT id, address, created_at FROM email ORDER BY created_at DESC LIMIT 5;"
-          query "SELECT id, emailId, from_address, subject, received_at FROM message ORDER BY received_at DESC LIMIT 5;"
 
-          echo "== pages project =="
-          curl -sS -H "$H" "$API/pages/projects?page=1&per_page=10" | jq '{success, errors, projects: [.result[]? | {name, subdomain, domains, source, latest_deployment_id: .latest_deployment.id, env_var_keys: (.deployment_configs.production.env_vars // {} | keys), d1_bindings: (.deployment_configs.production.d1_databases // [])}]}'
+          echo "== mailboxes =="
+          query "SELECT COUNT(*) AS total, SUM(CASE WHEN expires_at > (strftime('%s','now') * 1000) THEN 1 ELSE 0 END) AS active FROM email;"
+          query "SELECT MIN(created_at) AS oldest, MAX(created_at) AS newest FROM email;"
 
-          echo "== email routing rules =="
-          for z in gwenworks.com:737b1888abd11be52bd27b0f650865b2 gwen.edu.kg:7a581898b5e644f238fe9093a59fbe2b; do
-            zn=${z%%:*}
-            zi=${z##*:}
-            echo "-- $zn rules --"
-            curl -sS -H "$H" "https://api.cloudflare.com/client/v4/zones/$zi/email/routing/rules" | jq '{success, errors, rules: [.result[]? | {name, enabled, matchers: [.matchers[]?.value], actions: [.actions[]? | {type, value}]}]}'
-            echo "-- $zn catch_all --"
-            curl -sS -H "$H" "https://api.cloudflare.com/client/v4/zones/$zi/email/routing/rules/catch_all" | jq '{success, errors, enabled: .result.enabled, actions: .result.actions}'
-          done
+          echo "== messages =="
+          query "SELECT COUNT(*) AS total, MAX(received_at) AS last_received FROM message;"
+          query "SELECT date(received_at/1000, 'unixepoch') AS day, COUNT(*) AS n FROM message GROUP BY day ORDER BY day DESC LIMIT 14;"
+
+          echo "== auth =="
+          query "SELECT COUNT(*) AS n FROM user;"
+          query "SELECT COUNT(*) AS n FROM account WHERE provider = 'github';"
