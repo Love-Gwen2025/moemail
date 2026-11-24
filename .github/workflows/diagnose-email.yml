@@ -7,7 +7,7 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect D1 schema, size and write path
+      - name: Inspect D1 age and size distribution
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -17,20 +17,20 @@ jobs:
           API="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT"
           H="Authorization: Bearer $CF_TOKEN"
 
-          echo "== database details =="
-          curl -sS -H "$H" "$API/d1/database/$DB_ID" | jq -c '{success, errors, result: (.result | {name, file_size, num_tables, created_at, version})}'
-
           query() {
             local sql="$1"
             echo "-- $sql"
             curl -sS -H "$H" -H "Content-Type: application/json" -X POST "$API/d1/database/$DB_ID/query" \
-              -d "$(jq -n --arg sql "$sql" '{sql:$sql}')" | jq -c '{success, errors, result: [.result[0]? | {success, meta: {changes: .meta.changes, size_after: .meta.size_after}, rows: [.results[]?]}]}'
+              -d "$(jq -n --arg sql "$sql" '{sql:$sql}')" | jq -c '{success, errors, rows: [.result[0].results[]?]}'
           }
 
-          echo "== schema =="
-          query "SELECT name, type FROM sqlite_master WHERE type IN ('table','index') AND tbl_name IN ('email','message','webhook','user','account') ORDER BY type, name;"
+          echo "== size distribution =="
+          query "SELECT SUM(CASE WHEN received_at < (strftime('%s','now') - 7*86400)*1000 THEN 1 ELSE 0 END) AS older7_rows, SUM(CASE WHEN received_at < (strftime('%s','now') - 7*86400)*1000 THEN length(content) + length(coalesce(html, '')) ELSE 0 END) AS older7_bytes, SUM(CASE WHEN received_at < (strftime('%s','now') - 30*86400)*1000 THEN 1 ELSE 0 END) AS older30_rows, SUM(CASE WHEN received_at < (strftime('%s','now') - 30*86400)*1000 THEN length(content) + length(coalesce(html, '')) ELSE 0 END) AS older30_bytes, COUNT(*) AS total_rows, SUM(length(content) + length(coalesce(html, ''))) AS total_content_bytes FROM message;"
 
-          echo "== write probe =="
-          query "CREATE TABLE IF NOT EXISTS _diag_probe (id TEXT);"
-          query "INSERT INTO _diag_probe (id) VALUES ('diag');"
-          query "DROP TABLE IF EXISTS _diag_probe;"
+          echo "== page stats =="
+          query "PRAGMA page_size;"
+          query "PRAGMA page_count;"
+          query "PRAGMA freelist_count;"
+
+          echo "== account subscriptions =="
+          curl -sS -H "$H" "$API/subscriptions" | jq -c '{success, errors, result: [.result[]? | {name, price, currency, rate_plan_id: .rate_plan.id}]}'
