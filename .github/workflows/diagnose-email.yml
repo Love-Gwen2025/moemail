@@ -7,7 +7,7 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect aggregate mail stats
+      - name: Inspect D1 schema, size and write path
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -17,21 +17,20 @@ jobs:
           API="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT"
           H="Authorization: Bearer $CF_TOKEN"
 
+          echo "== database details =="
+          curl -sS -H "$H" "$API/d1/database/$DB_ID" | jq -c '{success, errors, result: (.result | {name, file_size, num_tables, created_at, version})}'
+
           query() {
             local sql="$1"
             echo "-- $sql"
             curl -sS -H "$H" -H "Content-Type: application/json" -X POST "$API/d1/database/$DB_ID/query" \
-              -d "$(jq -n --arg sql "$sql" '{sql:$sql}')" | jq -c '{success, errors, rows: [.result[0].results[]?]}'
+              -d "$(jq -n --arg sql "$sql" '{sql:$sql}')" | jq -c '{success, errors, result: [.result[0]? | {success, meta: {changes: .meta.changes, size_after: .meta.size_after}, rows: [.results[]?]}]}'
           }
 
-          echo "== mailbox domains =="
-          query "SELECT substr(address, instr(address, '@') + 1) AS domain, COUNT(*) AS n FROM email GROUP BY domain ORDER BY n DESC;"
+          echo "== schema =="
+          query "SELECT name, type FROM sqlite_master WHERE type IN ('table','index') AND tbl_name IN ('email','message','webhook','user','account') ORDER BY type, name;"
 
-          echo "== expiry range =="
-          query "SELECT MIN(expires_at) AS min_exp, MAX(expires_at) AS max_exp FROM email;"
-
-          echo "== ownership =="
-          query "SELECT SUM(CASE WHEN userId IS NULL THEN 1 ELSE 0 END) AS anonymous, SUM(CASE WHEN userId IS NOT NULL THEN 1 ELSE 0 END) AS owned FROM email;"
-
-          echo "== message domains =="
-          query "SELECT substr(to_address, instr(to_address, '@') + 1) AS domain, COUNT(*) AS n FROM message GROUP BY domain ORDER BY n DESC LIMIT 10;"
+          echo "== write probe =="
+          query "CREATE TABLE IF NOT EXISTS _diag_probe (id TEXT);"
+          query "INSERT INTO _diag_probe (id) VALUES ('diag');"
+          query "DROP TABLE IF EXISTS _diag_probe;"
